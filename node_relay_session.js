@@ -10,6 +10,32 @@ const { spawn } = require('child_process');
 const dateFormat = require('dateformat');
 const mkdirp = require('mkdirp');
 const fs = require('fs');
+const context = require('./node_core_ctx');
+
+const zeropad = (number) => {
+  return ('00' + number).slice(-2)
+}
+
+const durationToTime = (duration) => {
+  const hours = Math.floor(duration / 3600)
+  const minutes = Math.floor(duration / 60)
+  const seconds = duration % 60
+  return zeropad(hours) + ':' + zeropad(minutes) + ':' + zeropad(seconds) + ',000'
+}
+
+const genSrt = (time) => {
+  let srt = '\n'
+
+  for (let i = 0; i <= 36000; ++i) {
+    const duration = i
+    srt += (i + 1) + '\n'
+    srt += durationToTime(duration) + ' --> ' + durationToTime(duration + 1) + '\n'
+    srt += 'time: ' + (time + i) + '\n'
+    srt += '\n'
+  }
+
+  return srt
+}
 
 class NodeRelaySession extends EventEmitter {
   constructor(conf) {
@@ -18,23 +44,39 @@ class NodeRelaySession extends EventEmitter {
   }
 
   run() {
+    const duration = (context.durations || {})[this.conf.streamPath] || {}
+    duration.clock = undefined
 
-    let argv = ['-fflags', 'nobuffer', '-analyzeduration', '1000000', '-i', this.conf.inPath, '-c', 'copy', '-f', 'flv', this.conf.ouPath];
-    if (this.conf.inPath[0] === '/' || this.conf.inPath[1] === ':') {
-      argv.unshift('-re');
-    }
+    const time = duration.time || 0
+    const srt = genSrt(duration.time || 0)
+    const srtName = `srts/${this.id}.srt`
+    Logger.log('[Relay INFO] srt starting at time=', time, srtName);
+    fs.writeFileSync(srtName, srt)
+
+    let argv = [
+      '-fflags', 'nobuffer',
+      '-analyzeduration', '1000000',
+      '-i', this.conf.inPath,
+      '-i', srtName,
+      '-c', 'copy',
+      '-c:s', 'text',
+      '-f', 'flv', this.conf.ouPath
+    ];
+
+    Logger.log('[Relay start] id=', this.id, argv.toString());
+
     // Logger.debug(argv.toString());
     this.ffmpeg_exec = spawn(this.conf.ffmpeg, argv);
     this.ffmpeg_exec.on('error', (e) => {
-      // Logger.debug(e);
+      // Logger.debug(`relay !!!! 1 ${e}`);
     });
 
     this.ffmpeg_exec.stdout.on('data', (data) => {
-      // Logger.debug(`输出：${data}`);
+      // Logger.debug(`relay !!!! 2 ${data}`);
     });
 
     this.ffmpeg_exec.stderr.on('data', (data) => {
-      // Logger.debug(`错误：${data}`);
+      // Logger.debug(`relay !!!! 3 ${data}`);
     });
 
     this.ffmpeg_exec.on('close', (code) => {

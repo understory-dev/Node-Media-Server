@@ -107,7 +107,7 @@ class NodeRtmpSession {
     this.id = NodeCoreUtils.generateNewSessionID();
     this.ip = socket.remoteAddress;
     this.TAG = 'rtmp';
-    
+
     this.handshakePayload = Buffer.alloc(RTMP_HANDSHAKE_SIZE);
     this.handshakeState = RTMP_HANDSHAKE_UNINIT;
     this.handshakeBytes = 0;
@@ -608,7 +608,7 @@ class NodeRtmpSession {
     let rtmpChunks = this.rtmpChunksCreate(packet);
     let flvTag = NodeFlvSession.createFlvTag(packet);
 
-    //cache gop 
+    //cache gop
     if (this.rtmpGopCacheQueue != null) {
       if (this.aacSequenceHeader != null && payload[1] === 0) {
         //skip aac sequence header
@@ -633,6 +633,43 @@ class NodeRtmpSession {
 
     }
   }
+
+  // writeOnTextData(time) {
+  //   // compose onTextData command
+  //   let cmd = AMF.amf0encString('onTextData')
+  //   let mixedArray = AMF.amf0encArray({
+  //     type: 'Text',
+  //     text: 'time: ' + time,
+  //     // language: 'en',
+  //     // trackid: 'sync',
+  //   })
+  //   let payload = Buffer.concat([cmd, mixedArray])
+
+  //   let packet = RtmpPacket.create();
+  //   packet.header.fmt = RTMP_CHUNK_TYPE_0;
+  //   packet.header.cid = RTMP_CHANNEL_DATA;
+  //   packet.header.type = RTMP_TYPE_DATA;
+  //   packet.payload = payload;
+  //   packet.header.length = packet.payload.length;
+  //   let rtmpChunks = this.rtmpChunksCreate(packet);
+  //   let flvTag = NodeFlvSession.createFlvTag(packet);
+
+  //   for (let playerId of this.players) {
+  //     let playerSession = context.sessions.get(playerId);
+  //     if (playerSession instanceof NodeRtmpSession) {
+  //       if (playerSession.isStarting && playerSession.isPlaying && !playerSession.isPause && playerSession.isReceiveVideo) {
+  //         rtmpChunks.writeUInt32LE(playerSession.playStreamId, 8);
+  //         playerSession.socket.write(rtmpChunks);
+  //         console.log('wrote chunks')
+  //       }
+  //     } else if (playerSession instanceof NodeFlvSession) {
+  //       console.log('wrote tag')
+  //       playerSession.res.write(flvTag, null, (e) => {
+  //         //websocket will throw a error if not set the cb when closed
+  //       });
+  //     }
+  //   }
+  // }
 
   rtmpVideoHandler() {
     if (!this.isPublishing) {
@@ -681,8 +718,33 @@ class NodeRtmpSession {
     let rtmpChunks = this.rtmpChunksCreate(packet);
     let flvTag = NodeFlvSession.createFlvTag(packet);
 
+    // capture delta
+    if (this.isFirstVideoReceived && this.players.size) {
+      if (!context.durations) {
+        context.durations = {}
+      }
+      if (!context.durations[this.publishStreamPath]) {
+        context.durations[this.publishStreamPath] = {
+          time: -1,
+          elapsed: 0,
+          clock: this.parserPacket.clock,
+        }
+      }
+      const duration = context.durations[this.publishStreamPath]
+      if (duration.clock === undefined) {
+        duration.clock = this.parserPacket.clock
+      }
+      duration.elapsed += this.parserPacket.clock - duration.clock
+      duration.clock = this.parserPacket.clock
+      duration.time = Math.floor(duration.elapsed / 1000)
+      // const time = Math.floor(duration.elapsed / 1000)
+      // if (time != duration.time) {
+      //   duration.time = time
+      //   this.writeOnTextData(time)
+      // }
+    }
 
-    //cache gop 
+    //cache gop
     if ((codec_id == 7 || codec_id == 12) && this.rtmpGopCacheQueue != null) {
       if (frame_type == 1 && payload[1] == 1) {
         this.rtmpGopCacheQueue.clear();
@@ -717,10 +779,39 @@ class NodeRtmpSession {
     if (!this.isPublishing) {
       return;
     }
+    let packet;
+    let flvTag;
+    let rtmpChunks;
     let offset = this.parserPacket.header.type === RTMP_TYPE_FLEX_STREAM ? 1 : 0;
     let payload = this.parserPacket.payload.slice(offset, this.parserPacket.header.length);
     let dataMessage = AMF.decodeAmf0Data(payload);
     switch (dataMessage.cmd) {
+      case 'onTextData':
+        console.log(dataMessage)
+
+        packet = RtmpPacket.create();
+        packet.header.fmt = RTMP_CHUNK_TYPE_0;
+        packet.header.cid = RTMP_CHANNEL_DATA;
+        packet.header.type = RTMP_TYPE_DATA;
+        packet.payload = payload;
+        packet.header.length = packet.payload.length;
+        rtmpChunks = this.rtmpChunksCreate(packet);
+        flvTag = NodeFlvSession.createFlvTag(packet);
+
+        for (let playerId of this.players) {
+          let playerSession = context.sessions.get(playerId);
+          if (playerSession instanceof NodeRtmpSession) {
+            if (playerSession.isStarting && playerSession.isPlaying && !playerSession.isPause) {
+              rtmpChunks.writeUInt32LE(playerSession.playStreamId, 8);
+              playerSession.socket.write(rtmpChunks);
+            }
+          } else if (playerSession instanceof NodeFlvSession) {
+            playerSession.res.write(flvTag, null, (e) => {
+              //websocket will throw a error if not set the cb when closed
+            });
+          }
+        }
+        break;
       case '@setDataFrame':
         if (dataMessage.dataObj) {
           this.audioSamplerate = dataMessage.dataObj.audiosamplerate;
@@ -736,14 +827,14 @@ class NodeRtmpSession {
         };
         this.metaData = AMF.encodeAmf0Data(opt);
 
-        let packet = RtmpPacket.create();
+        packet = RtmpPacket.create();
         packet.header.fmt = RTMP_CHUNK_TYPE_0;
         packet.header.cid = RTMP_CHANNEL_DATA;
         packet.header.type = RTMP_TYPE_DATA;
         packet.payload = this.metaData;
         packet.header.length = packet.payload.length;
-        let rtmpChunks = this.rtmpChunksCreate(packet);
-        let flvTag = NodeFlvSession.createFlvTag(packet);
+        rtmpChunks = this.rtmpChunksCreate(packet);
+        flvTag = NodeFlvSession.createFlvTag(packet);
 
         for (let playerId of this.players) {
           let playerSession = context.sessions.get(playerId);
@@ -920,7 +1011,8 @@ class NodeRtmpSession {
   }
 
   onConnect(invokeMessage) {
-    invokeMessage.cmdObj.app = invokeMessage.cmdObj.app.replace('/', ''); //fix jwplayer
+    // this breaks app/appInstance
+    // invokeMessage.cmdObj.app = invokeMessage.cmdObj.app.replace('/', ''); //fix jwplayer
     context.nodeEvent.emit('preConnect', this.id, invokeMessage.cmdObj);
     if (!this.isStarting) {
       return;

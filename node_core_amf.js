@@ -688,7 +688,7 @@ function amf0encArray(a) {
   if (a instanceof Array) l = a.length; else l = Object.keys(a).length;
   Logger.debug('Array encode', l, a);
   let buf = Buffer.alloc(5);
-  buf.writeUInt8(8, 0);
+  buf.writeUInt8(0x08, 0);
   buf.writeUInt32BE(l, 1);
   let data = amf0encObject(a);
   return Buffer.concat([buf, data.slice(1)]);
@@ -962,6 +962,7 @@ const rtmpDataDecode = {
   "@setDataFrame": ["method", "dataObj"],
   "onMetaData": ["dataObj"],
   "|RtmpSampleAccess": ["bool1", "bool2"],
+  "onTextData": ["dataObj"],
 };
 
 
